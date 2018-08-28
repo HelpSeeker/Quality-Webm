@@ -6,8 +6,7 @@
 
 new_codecs=false
 parallel_convert=false
-parallel_afilter=false
-ask_parallel_afilter=true
+preview=false
 
 parallel_process=1
 bpp=0.1
@@ -18,13 +17,26 @@ bpp=0.1
 
 # Function to define help text for the -h flag
 usage() {
-	echo -e "Usage: $0 [-h] [-n] [-x threads] [-b custom_bpp] [-f filters]"
+	echo -e "Usage: $0 [-h] [-p] [-n] [-x threads] [-b custom_bpp] [-f filters]"
 	
 	echo -e "\\t-h: Show Help."
+	echo -e "\\t-p: Preview theoretical file size."
 	echo -e "\\t-n: Use the newer codecs VP9/Opus instead of VP8/Vorbis."
 	echo -e "\\t-x threads: Specify how many threads to use for encoding. Default value: 1."
 	echo -e "\\t-b custom_bpp: Set a custom bpp value. Default value: 0.2."
 	echo -e "\\t-f filters: Add custom ffmpeg filters."
+}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+showPreview() {
+	file_size=$(bc <<< "($video_bitrate+$audio_bitrate)*$length/8/1024")
+	
+	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+	echo "File: $input"
+	echo "Avg. video bitrate: ${video_bitrate}Kbps | Avg. audio bitrate: ${audio_bitrate}Kbps"
+	echo "Theoretical file size: ${file_size}MiB"
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -50,6 +62,9 @@ info() {
 			-of default=noprint_wrappers=1:nokey=1 "$input")
 
 	frame_rate=$(ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate \
+			-of default=noprint_wrappers=1:nokey=1 "$input")
+			
+	length=$(ffprobe -v error -show_entries format=duration \
 			-of default=noprint_wrappers=1:nokey=1 "$input")
 }
 
@@ -82,7 +97,10 @@ videoSettings() {
 	
 	video_bitrate=$(bc <<< "$bpp*$video_height*$video_width*$frame_rate/1000")
 	
-	video="-c:v $video_codec -slices 8 -threads 1 -deadline good -cpu-used 0 \
+	video_first="-c:v $video_codec -slices 8 -threads 1 -deadline good -cpu-used 5 \
+		-qmin 1 -qmax 50 -b:v ${video_bitrate}K"
+
+	video_second="-c:v $video_codec -slices 8 -threads 1 -deadline good -cpu-used 0 \
 		-qmin 1 -qmax 50 -b:v ${video_bitrate}K -tune ssim -auto-alt-ref 1 \
 		-lag-in-frames 25 -arnr-maxframes 15 -arnr-strength 3"
 }
@@ -91,12 +109,14 @@ videoSettings() {
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 audioSettings() {
+	audio_bitrate=192
+
 	if [[ "$new_codecs" = true ]]; then 
 		audio_codec="libopus"
-		audio="-c:a $audio_codec -ar 48000 -b:a 192K"
+		audio="-c:a $audio_codec -ac 2 -ar 48000 -b:a ${audio_bitrate}K"
 	else
 		audio_codec="libvorbis"
-		audio="-c:a $audio_codec -ar 48000 -q:a 10"
+		audio="-c:a $audio_codec -ac 2 -ar 48000 -q:a 6"
 	fi
 }
 
@@ -135,14 +155,17 @@ codecCheck() {
 	if [[ "$copy_audio" = true ]]; then
 		audio="-c:a copy"
 		mkdir test
-		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:a? -c:a copy "test/output.webm" || audioSettings
+		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:a? -c:a copy \
+		$filter "test/output.webm" || audioSettings
 		rm -rf test
 	fi
 	
 	if [[ "$copy_video" = true ]]; then
-		video="-c:v copy"
+		video_first="-c:v copy"
+		video_second="-c:v copy"
 		mkdir test
-		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:v -c:v copy "test/output.webm" || videoSettings
+		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:v -c:v copy \
+		$filter "test/output.webm" || videoSettings
 		rm -rf test
 	fi
 }
@@ -151,15 +174,14 @@ codecCheck() {
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 convert() {
-	ffmpeg -y -hide_banner -i "$input" \
-		-map 0:v -map 0:a? -map 0:s? \
-		$video -sn -an $filter -pass 1 -f webm /dev/null
+	ffmpeg -y -hide_banner -i "$input" -map 0:v \
+		$video_first $filter -pass 1 -f webm /dev/null
 		
 	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 				
-	ffmpeg -y -hide_banner -i "$input" \
-		-map 0:v -map 0:a? -map 0:s? -c:s copy -metadata title="${input%.*}" \
-		$video $audio $filter -pass 2 "../done/${input%.*}.webm"
+	ffmpeg -y -hide_banner -sub_charenc UTF-8 -i "$input" \
+		-map 0:v -map 0:a? -map 0:s? -c:s webvtt -metadata title="${input%.*}" \
+		$video_second $audio $filter -pass 2 "../done/${input%.*}.webm"
 		
 	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 		
@@ -167,13 +189,61 @@ convert() {
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+multiConvert() {
+	parallel_duration=$(bc <<< "scale=3; $length/$parallel_process")
+	
+	mkdir temp
+	
+	for (( j=0; j<parallel_process; j++ ))
+	do	
+	{
+		parallel_start=$(bc <<< "scale=3; $parallel_duration*$j")
+	
+		mkdir temp/$j
+		cd temp/$j || { echo "Error in multiConvert! No dir temp/$j present." && exit; }
+		
+		ffmpeg -y -hide_banner -ss $parallel_start -i "../../$input" \
+			-t $parallel_duration -map 0:v $video_first $filter -pass 1 -f webm /dev/null
+		
+		echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+				
+		ffmpeg -y -hide_banner -ss $parallel_start -i "../../$input" \
+			-t $parallel_duration -map 0:v $video_second $filter -pass 2 "${j}.webm"
+		
+		echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+		
+		cd ../..
+	} &
+	done
+	
+	wait
+	
+	for (( j=0; j<parallel_process; j++ ))
+	do
+		echo "file 'temp/${j}/${j}.webm'" >> list.txt
+	done
+	
+	ffmpeg -y -loglevel panic -f concat -i list.txt -c copy temp/video.webm
+	ffmpeg -y -hide_banner -i "$input" -map 0:a? -r 1 $filter $audio temp/audio.ogg	
+	
+	ffmpeg -y -loglevel panic -i temp/video.webm -i temp/audio.ogg -sub_charenc UTF-8 -i "$input" \
+			-map 0:v -map 1:a? -map 2:s? -c:v copy -c:a copy -c:s webvtt \
+			-metadata title="${input%.*}" "../done/${input%.*}.webm"
+			
+	rm -rf list.txt temp/
+}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Main script
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # Read user set flags
-while getopts ":hnx:b:f:" ARG; do
+while getopts ":hpnx:b:f:" ARG; do
 	case "$ARG" in
 	h) usage && exit;;
+	p) preview=true;;
 	n) new_codecs=true;;
 	x) parallel_process="$OPTARG" && parallel_convert=true;;
 	g) height="$OPTARG";;
@@ -182,6 +252,12 @@ while getopts ":hnx:b:f:" ARG; do
 	*) echo "Unknown flag used. Use $0 -h to show all available options." && exit;;
 	esac;
 done
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Revert back to normal convert if <= 1 thread is specified
+if (( parallel_process <= 1 )); then parallel_convert=false; fi
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -209,12 +285,18 @@ mkdir ../done 2> /dev/null
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # Main conversion loop
-for input in *; do (
+for input in *
+do
 	info
 	if [[ -n "$filter_settings" ]]; then filterTest; fi
 	videoSettings
 	audioSettings
-	concatenate
-	codecCheck
-	convert
-); done
+	
+	if [[ "$preview" = true ]]; then
+		showPreview
+	else
+		concatenate
+		codecCheck
+		if [[ "$parallel_convert" = true ]]; then multiConvert; else convert; fi
+	fi	
+done
