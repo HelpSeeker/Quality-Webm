@@ -10,7 +10,7 @@ parallel_afilter=false
 ask_parallel_afilter=true
 
 parallel_process=1
-bpp=0.2
+bpp=0.1
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Functions
@@ -25,6 +25,18 @@ usage() {
 	echo -e "\\t-x threads: Specify how many threads to use for encoding. Default value: 1."
 	echo -e "\\t-b custom_bpp: Set a custom bpp value. Default value: 0.2."
 	echo -e "\\t-f filters: Add custom ffmpeg filters."
+}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Look for certain substring $2 within a string $1
+# If substring is found (e.i. $1 contains the substring) -> Success
+contains() {
+	case "$1" in 
+		*"$2"*) return 0;;
+		*) return 1;;
+	esac
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -69,6 +81,10 @@ videoSettings() {
 	fi
 	
 	video_bitrate=$(bc <<< "$bpp*$video_height*$video_width*$frame_rate/1000")
+	
+	video="-c:v $video_codec -slices 8 -threads 1 -deadline good -cpu-used 0 \
+		-qmin 1 -qmax 50 -b:v ${video_bitrate}K -tune ssim -auto-alt-ref 1 \
+		-lag-in-frames 25 -arnr-maxframes 15 -arnr-strength 3"
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -77,11 +93,11 @@ videoSettings() {
 audioSettings() {
 	if [[ "$new_codecs" = true ]]; then 
 		audio_codec="libopus"
+		audio="-c:a $audio_codec -ar 48000 -b:a 192K"
 	else
 		audio_codec="libvorbis"
+		audio="-c:a $audio_codec -ar 48000 -q:a 10"
 	fi
-	
-	audio_bitrate=192
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -98,21 +114,54 @@ concatenate() {
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+codecCheck() {
+	copy_audio=false
+	copy_video=false
+	
+	acodec_list=("Vorbis" "Opus")
+	vcodec_list=("VP8" "VP9")
+	input_info=$(ffprobe -v error -show_streams -of default=noprint_wrappers=1:nokey=1 "$input")
+					
+	for acodec in ${acodec_list[@]}
+	do
+		contains "$input_info" "$acodec" && copy_audio=true
+	done
+	
+	for vcodec in ${acodec_list[@]}
+	do
+		contains "$input_info" "$vcodec" && copy_video=true
+	done
+	
+	if [[ "$copy_audio" = true ]]; then
+		audio="-c:a copy"
+		mkdir test
+		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:a? -c:a copy "test/output.webm" || audioSettings
+		rm -rf test
+	fi
+	
+	if [[ "$copy_video" = true ]]; then
+		video="-c:v copy"
+		mkdir test
+		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:v -c:v copy "test/output.webm" || videoSettings
+		rm -rf test
+	fi
+}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 convert() {
 	ffmpeg -y -hide_banner -i "$input" \
 		-map 0:v -map 0:a? -map 0:s? \
-		-c:v $video_codec -slices 8 -threads 1 -deadline good -cpu-used 5 \
-		-qmin 1 -qmax 50 -b:v ${video_bitrate}K \
-		-sn -an $filter -pass 1 -f webm /dev/null
+		$video -sn -an $filter -pass 1 -f webm /dev/null
+		
+	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 				
 	ffmpeg -y -hide_banner -i "$input" \
-		-map 0:v -map 0:a? -map 0:s? -c:s copy \
-		-c:v $video_codec -slices 8 -threads 1 -deadline good -cpu-used 0 \
-		-qmin 1 -qmax 50 -b:v ${video_bitrate}K \
-		-tune ssim -metadata title="${input%.*}" -auto-alt-ref 1 \
-		-lag-in-frames 25 -arnr-maxframes 15 -arnr-strength 3 \
-		-c:a $audio_codec -ac 2 -ar 48000 -b:a ${audio_bitrate}K \
-		$filter -pass 2 "../done/${input%.*}.webm"
+		-map 0:v -map 0:a? -map 0:s? -c:s copy -metadata title="${input%.*}" \
+		$video $audio $filter -pass 2 "../done/${input%.*}.webm"
+		
+	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 		
 	rm ffmpeg2pass-0.log 2> /dev/null
 }
@@ -166,5 +215,6 @@ for input in *; do (
 	videoSettings
 	audioSettings
 	concatenate
+	codecCheck
 	convert
 ); done
