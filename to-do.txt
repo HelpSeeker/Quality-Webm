@@ -1,7 +1,0 @@
-In no particular order:
-
--) Add smart audio stream copying
--) Add mkv mode (+ extended list of codecs to copy)
--) Add multi-thread encoding
--) Add Recreate mode (video+audio bitrate read from input file)
--) Make audio bitrate adjustable based on input audio channels
