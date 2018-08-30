@@ -11,6 +11,13 @@ preview=false
 parallel_process=1
 bpp=0.1
 
+acodec_list=("Vorbis" "Opus")
+vcodec_list=("VP8" "VP9")
+extension="webm"
+
+afilters=false
+vfilters=false
+
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Functions
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -83,22 +90,31 @@ info() {
 
 # Determine height/width of the output, when a user defined scale filter is being used
 filterTest() {
+	mkdir test
+	
 	ffmpeg -y -hide_banner -loglevel panic -i "$input" \
 		-t 1 -c:v libvpx -deadline good -cpu-used 5 \
-		-filter_complex $filter_settings -an "../done/${input%.*}.webm"
+		-filter_complex $filter_settings -an "test/output.$extension"
 	
 	# Read user set height/width from the test webm
 	video_height=$(ffprobe -v error -select_streams v:0 -show_entries stream=height \
-					-of default=noprint_wrappers=1:nokey=1 "../done/${input%.*}.webm")
+					-of default=noprint_wrappers=1:nokey=1 "test/output.$extension")
 	
 	video_width=$(ffprobe -v error -select_streams v:0 -show_entries stream=width \
-					-of default=noprint_wrappers=1:nokey=1 "../done/${input%.*}.webm")
+					-of default=noprint_wrappers=1:nokey=1 "test/output.$extension")
+					
+	ffmpeg -loglevel panic -i "$input" -t 1 -map 0:v -c:v copy \
+		-filter_complex "$filter_settings" "test/video.$extension" || vfilters=true
+	ffmpeg -loglevel panic -i "$input" -t 1 -map 0:a? -c:a copy \
+		-filter_complex "$filter_settings" "test/audio.$extension" || afilters=true
+	
+	rm -rf test
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-videoSettings() {
+videoSettings() {	
 	if [[ "$new_codecs" = true ]]; then 
 		video_codec="libvpx-vp9"
 	else
@@ -126,21 +142,40 @@ audioSettings() {
 	do
 		channels=$(ffprobe -v error -select_streams a:$j -show_entries stream=channels \
 			-of default=noprint_wrappers=1:nokey=1 "$input")
-			
-		audio_codec="libopus"
+		input_audio_codec=$(ffprobe -v error -select_streams a:0:$j \
+			-show_entries stream=codec_long_name -of default=noprint_wrappers=1:nokey=1 "$input")
 		
-		mkdir test
-		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:a:$j \
-			-c:a:$j libopus "test/output.webm" || audio_codec="libvorbis"
-		rm -rf test
+		copy_audio=false			
+		for acodec in ${acodec_list[@]}
+		do
+			contains "$input_audio_codec" "$acodec" && copy_audio=true
+		done
 	
-		(( audio_bitrate = channels * 96 ))
-		(( complete_audio += audio_bitrate ))
+		if [[ "$copy_audio" = true && "$afilters" = false ]]; then
+			mkdir test
+			ffmpeg -loglevel panic -i "$input" -map 0:a:$j -c:a copy "test/output.webm"
+			input_audio_bitrate=$(ffprobe -v error -show_entries format=bit_rate \
+					-of default=noprint_wrappers=1:nokey=1 "test/output.$extension")
+			rm -rf test
+			
+			audio_bitrate=$(bc <<< "$input_audio_bitrate/1000")
+			(( complete_audio += audio_bitrate ))
+		
+			audio="${audio}-c:a:$j copy "
+		else
+			audio_codec="libopus"
+		
+			mkdir test
+			ffmpeg -loglevel panic -i "$input" -t 1 -map 0:a:$j \
+				-c:a:$j libopus "test/output.$extension" || audio_codec="libvorbis"
+			rm -rf test
+	
+			(( audio_bitrate = channels * 96 ))
+			(( complete_audio += audio_bitrate ))
 
-		audio="${audio}-c:a:$j $audio_codec -b:a:$j ${audio_bitrate}K "
+			audio="${audio}-c:a:$j $audio_codec -b:a:$j ${audio_bitrate}K "
+		fi
 	done
-	
-	audio="${audio}-ar 48000"
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -158,38 +193,31 @@ concatenate() {
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 codecCheck() {
-	copy_audio=false
 	copy_video=false
+	image_sub=false
 	
-	acodec_list=("Vorbis" "Opus")
-	vcodec_list=("VP8" "VP9")
 	input_info=$(ffprobe -v error -show_streams -of default=noprint_wrappers=1:nokey=1 "$input")
-					
-	for acodec in ${acodec_list[@]}
-	do
-		contains "$input_info" "$acodec" && copy_audio=true
-	done
 	
-	for vcodec in ${acodec_list[@]}
+	for vcodec in ${vcodec_list[@]}
 	do
 		contains "$input_info" "$vcodec" && copy_video=true
 	done
 	
-	if [[ "$copy_audio" = true ]]; then
-		audio="-c:a copy"
-		mkdir test
-		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:a? -c:a copy \
-		$filter "test/output.webm" || audioSettings
-		rm -rf test
-	fi
-	
-	if [[ "$copy_video" = true ]]; then
+	if [[ "$copy_video" = true && "$vfilters" = false ]]; then
 		video_first="-c:v copy"
 		video_second="-c:v copy"
-		mkdir test
-		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:v -c:v copy \
-		$filter "test/output.webm" || videoSettings
-		rm -rf test
+	else
+		copy_video=false
+	fi
+	
+	ffmpeg -loglevel panic -i "$input" -map 0:s? -c:s webvtt "temp/sub.vtt" || image_sub=true
+	
+	if [[ "$image_sub" = true ]]; then
+		extension="mkv"
+		subtitles="-c:s copy"
+	else
+		extension="webm"
+		subtitles="-c:s webvtt"
 	fi
 }
 
@@ -203,11 +231,10 @@ convert() {
 	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 				
 	ffmpeg -y -hide_banner -sub_charenc UTF-8 -i "$input" \
-		-map 0:v -map 0:a? -map 0:s? -metadata title="${input%.*}" \
-		$video_second $audio $filter -pass 2 "../done/${input%.*}.webm"
+		-map 0:v -map 0:a? -map 0:s? $subtitles -metadata title="${input%.*}" \
+		$video_second $audio $filter -pass 2 "../done/${input%.*}.$extension"
 		
 	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-	#-map 0:s? -c:s webvtt
 		
 	rm ffmpeg2pass-0.log 2> /dev/null
 }
@@ -234,7 +261,7 @@ multiConvert() {
 		echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 				
 		ffmpeg -y -hide_banner -ss $parallel_start -i "../../$input" \
-			-t $parallel_duration -map 0:v $video_second $filter -pass 2 "${j}.webm"
+			-t $parallel_duration -map 0:v $video_second $filter -pass 2 "${j}.$extension"
 		
 		echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 		
@@ -246,15 +273,19 @@ multiConvert() {
 	
 	for (( j=0; j<parallel_process; j++ ))
 	do
-		echo "file 'temp/${j}/${j}.webm'" >> list.txt
+		echo "file 'temp/${j}/${j}.$extension'" >> list.txt
 	done
 	
-	ffmpeg -y -loglevel panic -f concat -i list.txt -c copy temp/video.webm
-	ffmpeg -y -hide_banner -i "$input" -map 0:a? -r 1 $filter $audio temp/audio.ogg	
+	ffmpeg -loglevel panic -f concat -i list.txt -c copy "temp/video.webm"
+	if [[ "$afilters" = true ]]; then
+		ffmpeg -hide_banner -i "$input" -map 0:a? -r 1 $filter $audio "temp/audio.ogg"
+	else
+		ffmpeg -hide_banner -i "$input" -map 0:a? $audio "temp/audio.ogg"
+	fi
 	
 	ffmpeg -y -loglevel panic -i temp/video.webm -i temp/audio.ogg -sub_charenc UTF-8 -i "$input" \
-			-map 0:v -map 1:a? -map 2:s? -c:v copy -c:a copy -c:s webvtt \
-			-metadata title="${input%.*}" "../done/${input%.*}.webm"
+		-map 0:v -map 1:a? -map 2:s? -c:v copy -c:a copy $subtitles \
+		-metadata title="${input%.*}" "../done/${input%.*}.$extension"
 			
 	rm -rf list.txt temp/
 }
@@ -270,7 +301,6 @@ while getopts ":hpnx:b:f:" ARG; do
 	p) preview=true;;
 	n) new_codecs=true;;
 	x) parallel_process="$OPTARG" && parallel_convert=true;;
-	g) height="$OPTARG";;
 	b) bpp="$OPTARG";;
 	f) filter_settings="$OPTARG";;
 	*) echo "Unknown flag used. Use $0 -h to show all available options." && exit;;
@@ -315,12 +345,16 @@ do
 	if [[ -n "$filter_settings" ]]; then filterTest; fi
 	videoSettings
 	audioSettings
+	codecCheck
+	concatenate
 	
 	if [[ "$preview" = true ]]; then
 		showPreview
 	else
-		concatenate
-		codecCheck
-		if [[ "$parallel_convert" = true ]]; then multiConvert; else convert; fi
+		if [[ "$parallel_convert" = true && "$copy_video" = false ]];then 
+			multiConvert
+		else
+			convert
+		fi
 	fi	
 done

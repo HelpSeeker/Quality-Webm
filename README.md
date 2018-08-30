@@ -18,7 +18,7 @@ Usage: quality.sh [-h] [-p] [-n] [-x threads] [-b custom_bpp] [-f filters]
 
 Option | What it does
 ---------- | ------------
--p | Prints a (very) rough estimate of the resulting file size in MiB. Also shows the used video and audio bitrate.
+-p | Prints a rough estimate of the resulting file size in MiB. Also shows the used video and audio bitrate.
 -n | Switches to the newer video codec VP9. This will lead to a much better compression, but also reduces the encoding speed immensely. Best used with multi-threading.
 -x threads | Enables multi-threading for a faster conversion. **This isn't libvpx's multi-threading and doesn't come with its weird limitations!** See [this related wiki page](https://github.com/HelpSeeker/Restricted-Webm/wiki/Fast-encoding-mode) for more information.
 -b custom_bpp | Sets a custom bits per pixel value. Higher values result in a higher quality. Takes resolution and frame rate into account and adjusts the video bitrate accordingly. Default value: 0.1.
@@ -50,15 +50,14 @@ Quality-Webm/
 Functionality (both implemented and planned):
 
 - [x] Adjust video bitrate based on bpp value
-- [x] Copy input video stream if codec is compatible
-- [x] Copy input audio streams if ALL streams have a compatible codec
+- [x] Smart stream copying. Webm-compatible streams will be copied, unless user set filters prevent it
 - [x] Multi-threading by encoding the footage simultaneously in separate parts
-- [x] Option to print a rough estimate of the resulting file size
+- [x] Option to print an estimate of the resulting file size
 - [x] Allow to switch between VP9 and VP8
 - [x] Use Opus as standard audio codec
 - [x] Use Vorbis as fallback codec, if Opus encoding fails (see [this bug tracker](https://trac.ffmpeg.org/ticket/5718))
 - [x] Set audio bitrate for each audio stream based on the channel count
-- [ ] Include the bitrate of copied streams into the file size preview
-- [ ] Differentiate between audio streams with different codecs
+- [x] Switch to mkv container, if image-based subtitles are being used ([as the conversion from image- to text-based subtitles isn't trivial](https://linux.goeszen.com/extract-subtitles-with-ffmpeg-from-a-ts-video-file.html))
 - [ ] Option to choose the input video/audio bitrate
-- [ ] Free mkv mode. Switches from webm to mkv and allows all free codecs.
+- [ ] Free mkv mode. Switches from webm to mkv and allows all free codecs
+- [ ] Include bitrate of copied video streams in the file size preview
