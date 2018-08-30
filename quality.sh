@@ -21,9 +21,9 @@ usage() {
 	
 	echo -e "\\t-h: Show Help."
 	echo -e "\\t-p: Preview theoretical file size."
-	echo -e "\\t-n: Use the newer codecs VP9/Opus instead of VP8/Vorbis."
+	echo -e "\\t-n: Use the newer video codec VP9 instead of VP8."
 	echo -e "\\t-x threads: Specify how many threads to use for encoding. Default value: 1."
-	echo -e "\\t-b custom_bpp: Set a custom bpp value. Default value: 0.2."
+	echo -e "\\t-b custom_bpp: Set a custom bpp value. Default value: 0.1."
 	echo -e "\\t-f filters: Add custom ffmpeg filters."
 }
 
@@ -31,11 +31,11 @@ usage() {
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 showPreview() {
-	file_size=$(bc <<< "($video_bitrate+$audio_bitrate)*$length/8/1024")
+	file_size=$(bc <<< "($video_bitrate+$complete_audio)*$length/8/1024")
 	
 	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 	echo "File: $input"
-	echo "Avg. video bitrate: ${video_bitrate}Kbps | Avg. audio bitrate: ${audio_bitrate}Kbps"
+	echo "Video bitrate: ${video_bitrate}Kbps | Audio bitrate (all streams combined): ${complete_audio}Kbps"
 	echo "Theoretical file size: ${file_size}MiB"
 }
 
@@ -66,6 +66,16 @@ info() {
 			
 	length=$(ffprobe -v error -show_entries format=duration \
 			-of default=noprint_wrappers=1:nokey=1 "$input")
+			
+	for (( i=0; i<100; i++ ))
+	do
+		index=$(ffprobe -v error -select_streams a:$i -show_entries stream=index \
+			-of default=noprint_wrappers=1:nokey=1 "$input")
+		if [[ "$index" = "" ]]; then
+			audio_streams=$i
+			break;
+		fi
+	done
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -109,15 +119,28 @@ videoSettings() {
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 audioSettings() {
-	audio_bitrate=192
+	audio=""
+	complete_audio=0
 
-	if [[ "$new_codecs" = true ]]; then 
+	for (( j=0; j<audio_streams; j++ ))
+	do
+		channels=$(ffprobe -v error -select_streams a:$j -show_entries stream=channels \
+			-of default=noprint_wrappers=1:nokey=1 "$input")
+			
 		audio_codec="libopus"
-		audio="-c:a $audio_codec -ac 2 -ar 48000 -b:a ${audio_bitrate}K"
-	else
-		audio_codec="libvorbis"
-		audio="-c:a $audio_codec -ac 2 -ar 48000 -q:a 6"
-	fi
+		
+		mkdir test
+		ffmpeg -loglevel panic -i "$input" -t 1 -map 0:a:$j \
+			-c:a:$j libopus "test/output.webm" || audio_codec="libvorbis"
+		rm -rf test
+	
+		(( audio_bitrate = channels * 96 ))
+		(( complete_audio += audio_bitrate ))
+
+		audio="${audio}-c:a:$j $audio_codec -b:a:$j ${audio_bitrate}K "
+	done
+	
+	audio="${audio}-ar 48000"
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -180,10 +203,11 @@ convert() {
 	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 				
 	ffmpeg -y -hide_banner -sub_charenc UTF-8 -i "$input" \
-		-map 0:v -map 0:a? -map 0:s? -c:s webvtt -metadata title="${input%.*}" \
+		-map 0:v -map 0:a? -map 0:s? -metadata title="${input%.*}" \
 		$video_second $audio $filter -pass 2 "../done/${input%.*}.webm"
 		
 	echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+	#-map 0:s? -c:s webvtt
 		
 	rm ffmpeg2pass-0.log 2> /dev/null
 }
