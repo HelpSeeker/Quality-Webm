@@ -19,7 +19,7 @@ Usage: quality.sh [-h] [-p] [-n] [-x threads] [-b custom_bpp] [-f filters]
 Option | What it does
 ---------- | ------------
 -p | Prints a (very) rough estimate of the resulting file size in MiB. Also shows the used video and audio bitrate.
--n | Switches to the newer video codec VP9. This will lead to a much better compression (especially at low bitrates), but also reduces the encoding speed immensely. Best used with multi-threading.
+-n | Switches to the newer video codec VP9. This will lead to a much better compression, but also reduces the encoding speed immensely. Best used with multi-threading.
 -x threads | Enables multi-threading for a faster conversion. **This isn't libvpx's multi-threading and doesn't come with its weird limitations!** See [this related wiki page](https://github.com/HelpSeeker/Restricted-Webm/wiki/Fast-encoding-mode) for more information.
 -b custom_bpp | Sets a custom bits per pixel value. Higher values result in a higher quality. Takes resolution and frame rate into account and adjusts the video bitrate accordingly. Default value: 0.1.
 -f filters | Adds a custom filter string to the ffmpeg command. The filters entered will get passed down as is. Any mistakes in the filter syntax will throw errors. See [ffmpeg's documentation on filters](https://ffmpeg.org/ffmpeg-filters.html) for more details.
