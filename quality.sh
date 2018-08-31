@@ -15,9 +15,6 @@ acodec_list=("Vorbis" "Opus")
 vcodec_list=("VP8" "VP9")
 extension="webm"
 
-afilters=false
-vfilters=false
-
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Functions
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -90,9 +87,12 @@ info() {
 
 # Determine height/width of the output, when a user defined scale filter is being used
 filterTest() {
+	afilters=false
+	vfilters=false
+	
 	mkdir test
 	
-	ffmpeg -y -hide_banner -loglevel panic -i "$input" \
+	ffmpeg -loglevel error -i "$input" \
 		-t 1 -c:v libvpx -deadline good -cpu-used 5 \
 		-filter_complex $filter_settings -an "test/output.$extension"
 	
@@ -104,9 +104,9 @@ filterTest() {
 					-of default=noprint_wrappers=1:nokey=1 "test/output.$extension")
 					
 	ffmpeg -loglevel panic -i "$input" -t 1 -map 0:v -c:v copy \
-		-filter_complex "$filter_settings" "test/video.$extension" || vfilters=true
+		-filter_complex "$filter_settings" "test/video.mkv" || vfilters=true
 	ffmpeg -loglevel panic -i "$input" -t 1 -map 0:a? -c:a copy \
-		-filter_complex "$filter_settings" "test/audio.$extension" || afilters=true
+		-filter_complex "$filter_settings" "test/audio.mkv" || afilters=true
 	
 	rm -rf test
 }
@@ -153,7 +153,7 @@ audioSettings() {
 	
 		if [[ "$copy_audio" = true && "$afilters" = false ]]; then
 			mkdir test
-			ffmpeg -loglevel panic -i "$input" -map 0:a:$j -c:a copy "test/output.webm"
+			ffmpeg -loglevel error -i "$input" -map 0:a:$j -c:a copy "test/output.$extension"
 			input_audio_bitrate=$(ffprobe -v error -show_entries format=bit_rate \
 					-of default=noprint_wrappers=1:nokey=1 "test/output.$extension")
 			rm -rf test
@@ -210,7 +210,8 @@ codecCheck() {
 		copy_video=false
 	fi
 	
-	ffmpeg -loglevel panic -i "$input" -map 0:s? -c:s webvtt "temp/sub.vtt" || image_sub=true
+	mkdir temp
+	ffmpeg -loglevel panic -i "$input" -t 1 -r 1 -c:s webvtt "temp/output.webm" || image_sub=true
 	
 	if [[ "$image_sub" = true ]]; then
 		extension="mkv"
@@ -219,6 +220,8 @@ codecCheck() {
 		extension="webm"
 		subtitles="-c:s webvtt"
 	fi
+	
+	rm -rf temp
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -276,14 +279,14 @@ multiConvert() {
 		echo "file 'temp/${j}/${j}.$extension'" >> list.txt
 	done
 	
-	ffmpeg -loglevel panic -f concat -i list.txt -c copy "temp/video.webm"
+	ffmpeg -loglevel error -f concat -i list.txt -c copy "temp/video.webm"
 	if [[ "$afilters" = true ]]; then
 		ffmpeg -hide_banner -i "$input" -map 0:a? -r 1 $filter $audio "temp/audio.ogg"
 	else
 		ffmpeg -hide_banner -i "$input" -map 0:a? $audio "temp/audio.ogg"
 	fi
 	
-	ffmpeg -y -loglevel panic -i temp/video.webm -i temp/audio.ogg -sub_charenc UTF-8 -i "$input" \
+	ffmpeg -y -loglevel error -i temp/video.webm -i temp/audio.ogg -sub_charenc UTF-8 -i "$input" \
 		-map 0:v -map 1:a? -map 2:s? -c:v copy -c:a copy $subtitles \
 		-metadata title="${input%.*}" "../done/${input%.*}.$extension"
 			
