@@ -1,9 +1,21 @@
+***
+
+## Archived!
+
+The goal of this script is to produce high quality video output, but as it stands right now the WebM format isn't suited for this purpose, due to the lack of supported (efficient) video coding formats.
+
+* **VP8:** Very lacking standard (forced chroma subsampling, no lossless encoding, etc.) and no good encoder available.
+
+* **VP9:** Once again no good (FOSS) encoder available. SVT-VP9 might change that in the future, but right now Intel focuses exclusively on SVT-AV1.
+
+* **AV1:** Good standard, but still too new. Might be viable for everyday usage in a few years.
+
+***
+
 # Quality-Webm
 A bash script to simplify the process of making high quality webms.
 
 The goal is to reduce the user input to a single quality parameter.
-
-***
 
 ```
 Usage: quality.sh [-h] [-p] [-n] [-x threads] [-b custom_bpp] [-f filters]
@@ -16,6 +28,8 @@ Usage: quality.sh [-h] [-p] [-n] [-x threads] [-b custom_bpp] [-f filters]
 	-f filters: Add custom ffmpeg filters.
 ```
 
+## Usage
+
 Option | What it does
 ---------- | ------------
 -p | Prints a rough estimate of the resulting file size in MiB. Also shows the used video and audio bitrate.
@@ -24,9 +38,8 @@ Option | What it does
 -b custom_bpp | Sets a custom bits per pixel value. Higher values result in a higher quality. Takes resolution and frame rate into account and adjusts the video bitrate accordingly. Default value: 0.1.
 -f filters | Adds a custom filter string to the ffmpeg command. The filters entered will get passed down as is. Any mistakes in the filter syntax will throw errors. See [ffmpeg's documentation on filters](https://ffmpeg.org/ffmpeg-filters.html) for more details.
 
-***
+## Requirements 
 
-**Requirements:**  
 ffmpeg (with libvpx, libvpx-vp9, libvorbis and libopus enabled)  
 ffprobe  
 ```
@@ -45,7 +58,7 @@ Quality-Webm/
 
 ```
 
-***
+## Features
 
 Functionality (both implemented and planned):
 
